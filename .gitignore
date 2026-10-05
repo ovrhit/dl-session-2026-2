@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# prep.py 가 내려받는 원본 데이터셋 — 용량이 크고 언제든 다시 받을 수 있다
+*/_data/
+_hf_cache/
+
+# 체크포인트는 기본적으로 추적하지 않는다.
+# 세션에서 쓸 것만 골라 `git add -f` 하거나, HF Hub 에 올리고 setup.download_assets 로 받을 것.
+*/assets/*.pt
+
+# 4주차 코퍼스는 각자 다른 걸 쓴다
+week04_rnn/assets/corpus.txt
+week06_transformer/assets/corpus.txt

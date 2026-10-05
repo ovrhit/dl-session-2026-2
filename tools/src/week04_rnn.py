@@ -1,0 +1,200 @@
+# %% [markdown]
+# # 4주차 · RNN 언어모델 (2010) 데모
+# ### *Recurrent neural network based language model* (Mikolov et al.)
+#
+# | 블록 | 시간 | 내용 |
+# |---|---|---|
+# | **A. 재현** | 6분 | n-gram vs RNN perplexity — 논문 Table |
+# | **B. 시각화** | 6분 | 생성 문장의 변화 + 기울기가 과거까지 못 닿는 것 ★ |
+# | **C. 현대 연결** | 4분 | GPT-2와 비교 — 왜 RNN을 버렸나 |
+#
+# > **세션 전 준비**: `week04_rnn/assets/corpus.txt` 에 **한국어 텍스트**를 넣어두면
+# > B 블록 생성 데모가 훨씬 재밌다 (노래 가사, 소설, 동아리 공지 아무거나 1MB 내외).
+
+# %%
+REPO_URL = "https://github.com/ovrhit/dl-session-2026-2.git"
+
+import os, sys
+if "google.colab" in sys.modules and not os.path.exists("/content/dl-session"):
+    !git clone -q $REPO_URL /content/dl-session
+if os.path.exists("/content/dl-session"):
+    %cd /content/dl-session
+
+# %%
+FAST_MODE = True
+
+from common.setup import bootstrap
+ctx = bootstrap("week04_rnn", fast_mode=FAST_MODE)
+
+sys.path.insert(0, "week04_rnn")
+import prep
+from common import viz
+import json
+
+# %% [markdown]
+# ---
+# ## 오늘 논문이 주장하는 것
+#
+# 2주차·3주차는 전부 **이미지**였다. 이미지는 한 번에 통째로 보면 된다.
+# 그런데 문장은 **순서**가 있고 길이도 제각각이다.
+#
+# 2010년까지 언어모델의 표준은 **n-gram** 이었다.
+# "앞의 두 단어를 보고 다음 단어를 세어서 예측한다." 단순하고 강력하지만 두 가지 한계가 있다.
+#
+# 1. **문맥이 n개로 고정된다.** trigram은 세 단어 전은 절대 못 본다.
+# 2. **못 본 조합은 확률이 0이다.** 세상 모든 3단어 조합을 다 볼 수는 없다.
+#
+# > **논문의 제안**: 은닉 상태(hidden state)라는 벡터 하나에 "지금까지 읽은 것"을 압축해서
+# > 계속 들고 다니자. 그러면 문맥 길이가 원리적으로 무제한이고,
+# > 단어를 벡터로 표현하니 비슷한 단어끼리 지식을 나눠 쓸 수 있다.
+#
+# **평가 지표는 perplexity.**
+# 직관적으로 "다음 단어를 고를 때 실질적으로 몇 개 중에서 헤매고 있나"다.
+# vocab이 10,000개인데 perplexity가 200이면 → 사실상 200개 정도로 좁힌 것. 낮을수록 좋다.
+
+# %% [markdown]
+# ---
+# # A. n-gram vs RNN — 논문 Table 재현
+
+# %%
+if FAST_MODE:
+    data = json.loads(ctx.asset("A_perplexity.json").read_text(encoding="utf-8"))
+    viz.show(ctx.asset("A_perplexity.png"), width=1100)
+    print(f"vocab {data['vocab_size']:,}개 / 학습 {data['train_tokens']:,} 단어\n")
+    for k, v in data["perplexity"].items():
+        print(f"  {k:8s}  perplexity {v:8.1f}")
+else:
+    prep.block_a(epochs=5)           # T4 약 6분
+    viz.show(ctx.asset("A_perplexity.png"), width=1100)
+
+# %% [markdown]
+# ### 짚어줄 포인트
+#
+# - **bigram → trigram** 은 좋아진다. 문맥을 한 단어 더 봤으니까.
+#   그런데 4-gram, 5-gram으로 계속 가면? 좋아지다가 곧 나빠진다.
+#   문맥이 길수록 "그 조합을 학습 데이터에서 본 적 없을" 확률이 급격히 커지기 때문이다.
+#   **n-gram은 이 벽을 원리적으로 못 넘는다.**
+# - **RNN**은 문맥 길이가 고정이 아니다. 이론상 문장 처음까지 볼 수 있다.
+# - **LSTM**이 RNN보다 낫다는 것도 같이 보인다. 이건 B 블록으로 이어진다.
+#
+# 💬 **부원에게 던질 질문**: RNN이 이론상 문맥을 무한히 볼 수 있다면,
+# 왜 LSTM 같은 걸 또 만들었을까? (→ B 블록)
+
+# %% [markdown]
+# ---
+# # B-1. 모델이 언어를 배워가는 과정 ★
+#
+# 이번엔 **문자 단위**로 학습시킨다. 단어가 아니라 글자 하나하나를 예측한다.
+# 즉 모델은 시작할 때 **띄어쓰기가 뭔지, 단어라는 게 있는지조차 모른다.**
+#
+# 학습이 진행되면서 뱉는 문장을 epoch별로 찍어뒀다.
+
+# %%
+samples = json.loads(ctx.asset("B_samples.json").read_text(encoding="utf-8"))
+for s in samples:
+    print(f"━━━ epoch {s['epoch']} ━━━")
+    print(s["sample"][:230].replace("\n", " ⏎ "))
+    print()
+
+# %% [markdown]
+# 대체로 이런 순서로 배운다.
+#
+# 1. **글자 빈도** — 자주 나오는 글자만 마구 뱉는다
+# 2. **띄어쓰기와 단어 길이** — 단어처럼 생긴 덩어리가 생긴다 (뜻은 없다)
+# 3. **실제 단어** — 철자가 맞는 단어가 나온다
+# 4. **문법 비슷한 것** — 어순, 따옴표 짝, 줄바꿈 형식까지 맞춘다
+#
+# 아무도 "단어는 띄어쓰기로 구분된다"고 안 알려줬다.
+# **다음 글자 하나를 맞히라고만 시켰는데** 저 구조가 전부 따라 나온다.
+# 이 관찰이 7주차 GPT-3까지 그대로 확장된다 — 다음 토큰 예측만으로 얼마나 멀리 갈 수 있나.
+
+# %% [markdown]
+# # B-2. 그런데 RNN은 금방 까먹는다
+#
+# 마지막 시점의 손실이 **d칸 떨어진 과거 입력**에 대해 갖는 기울기 크기를 재본다.
+# 기울기가 0에 가깝다 = 그 과거는 학습에 영향을 못 준다 = **사실상 기억 못 한다.**
+
+# %%
+viz.show(ctx.asset("B_vanishing.png"), width=1000)
+
+# %% [markdown]
+# y축이 **로그 스케일**이라는 데 주의. RNN은 거리가 멀어질수록 기울기가 **지수적으로** 0에 간다.
+#
+# 이유는 단순하다. 역전파가 시간을 거슬러 갈 때 같은 가중치 행렬을 계속 곱한다.
+# 그 행렬의 크기가 1보다 조금만 작아도 `0.9^100 ≈ 0.00003` 이 된다.
+# (반대로 1보다 크면 폭발한다. 그래서 gradient clipping이 필수였다.)
+#
+# **LSTM**은 게이트로 "그대로 통과시키는 길"을 따로 만들어서 이걸 완화한다.
+# 3주차 ResNet의 skip connection과 발상이 정확히 같다 — 곱하지 말고 **더해서 흘려보내기**.
+#
+# > 그래도 완전히 해결되지는 않는다. 문장 50단어쯤 되면 앞부분은 흐릿해진다.
+# > **다음 주 논문(Attention)이 바로 이 지점을 공격한다.**
+
+# %% [markdown]
+# ---
+# # C. 그래서 지금은? — 왜 RNN을 버렸나
+
+# %%
+mod = json.loads(ctx.asset("C_modern.json").read_text(encoding="utf-8"))
+rnn = json.loads(ctx.asset("A_perplexity.json").read_text(encoding="utf-8"))["perplexity"]
+
+viz.table([
+    {"모델": "trigram (2010 이전 표준)", "연도": 2000, "perplexity": f"{rnn['trigram']:.0f}"},
+    {"모델": "RNN LM (오늘 논문)",        "연도": 2010, "perplexity": f"{rnn['RNN']:.0f}"},
+    {"모델": "LSTM LM",                   "연도": 2014, "perplexity": f"{rnn['LSTM']:.0f}"},
+    {"모델": f"{mod['model']} (Transformer)", "연도": 2019,
+     "perplexity": f"{mod['ppl_per_word']:.0f}"},
+])
+
+# %% [markdown]
+# > ⚠️ **여기서 한 가지 정직하게 짚고 갈 것**
+# >
+# > GPT-2는 BPE 토큰 단위로, 우리 RNN은 단어 단위로 예측한다.
+# > 토큰 개수가 다르면 perplexity를 그대로 비교할 수 없다.
+# > 그래서 위 표는 총 손실을 **단어 수로 나눠** 단위를 맞춘 값이다
+# > (`prep.block_c` 의 `ppl_per_word`). BPE 토큰 기준 수치는 아래 셀에서 따로 찍는다.
+# >
+# > 논문 읽을 때도 같은 함정이 있다. **"우리가 SOTA"라는 표를 보면
+# > 평가 단위와 데이터가 같은지부터 확인하는 습관**을 들이는 게 좋다.
+
+# %%
+print(f"BPE 토큰 기준 perplexity = {mod['ppl_per_bpe_token']:.1f}  (단위가 달라 직접 비교 불가)")
+print(f"\n── {mod['model']} 생성 샘플 ──\n{mod['sample']}")
+
+# %% [markdown]
+# ### RNN을 버린 진짜 이유는 성능이 아니라 **속도**였다
+#
+# RNN은 t번째를 계산하려면 t−1번째가 끝나야 한다. **순차적이라 병렬화가 안 된다.**
+# 문장 길이가 1000이면 1000번을 줄 세워 기다려야 한다.
+#
+# GPU는 수천 개를 동시에 계산하는 기계인데 RNN은 그걸 못 쓴다.
+# 6주차 Transformer의 제목이 "Attention Is All You Need" 인 이유가 여기 있다 —
+# **recurrence를 없애면 전부 한 번에 계산할 수 있다.**
+
+# %%
+# 라이브: 부원이 준 prefix로 이어쓰기 비교
+PREFIX = "옛날 옛적에"          # 자유롭게 바꿔서 실행
+
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+mid = "skt/kogpt2-base-v2"      # 한국어. 영어면 "gpt2"
+tok = AutoTokenizer.from_pretrained(mid)
+lm = AutoModelForCausalLM.from_pretrained(mid).eval().to(ctx.device)
+out = lm.generate(**tok(PREFIX, return_tensors="pt").to(ctx.device),
+                  max_new_tokens=60, do_sample=True, temperature=0.9, top_p=0.95,
+                  pad_token_id=tok.eos_token_id)
+print(tok.decode(out[0], skip_special_tokens=True))
+
+# %% [markdown]
+# ---
+# ## 오늘 정리
+#
+# 1. RNN은 문맥을 **고정 길이가 아닌 벡터**에 담아서 n-gram의 벽을 넘었다 (A)
+# 2. 다음 글자 하나만 맞히게 시켰는데 단어·문법이 따라 나왔다 (B-1)
+# 3. 하지만 기울기가 과거까지 못 닿는다 — 긴 문맥은 여전히 못 본다 (B-2)
+# 4. 결정적으로 **병렬화가 안 된다** (C)
+#
+# ### 다음 주 예고 — Bahdanau Attention (2014)
+# RNN으로 번역을 한다고 해보자. 문장 전체를 벡터 **하나**에 밀어넣고,
+# 그걸 풀어서 다른 언어로 쓴다. 문장이 길어지면 어떻게 될까?
+# 다음 주 논문의 Figure 2가 그 답이고, 해법은 "하나에 밀어넣지 말자" 였다.

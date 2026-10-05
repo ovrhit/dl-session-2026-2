@@ -1,0 +1,5 @@
+# Windows에서 작성하고 Colab(Linux)에서 클론하므로 저장소 안에서는 LF로 통일한다.
+* text=auto eol=lf
+
+# 노트북은 생성물이라 diff가 의미 없다 — GitHub 리뷰 화면에서 접어둔다.
+*.ipynb linguist-generated=true

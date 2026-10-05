@@ -1,0 +1,11 @@
+# 세션 공통 핵심 의존성.
+#
+# torch / torchvision / numpy / matplotlib / pillow / tqdm 은 Colab에 이미 설치되어 있고,
+# 여기서 다시 pin 하면 CUDA 빌드가 CPU 빌드로 갈아치워져서 GPU가 죽는다. 절대 추가하지 말 것.
+#
+# 주차별 추가 패키지는 weekNN_*/requirements.txt 에 둔다 (설치 시간을 주차별로 분산).
+
+transformers>=4.44
+datasets>=2.20
+huggingface_hub>=0.24
+imageio>=2.34

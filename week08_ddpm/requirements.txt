@@ -1,0 +1,2 @@
+diffusers>=0.30
+accelerate>=0.33
